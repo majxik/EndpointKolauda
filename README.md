@@ -113,9 +113,15 @@ python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.
 
 ## Status meanings
 
+When multiple status labels apply to one field, they are always shown in this fixed order:
+
+- `MISSING`, `EXTRA`, `TYPE_DRIFT`, `NULLABLE`, `ALWAYS_NULL`, `OPTIONAL?`, `CONSTANT`
+
 - `TYPE_DRIFT`: multiple data types seen for the same field path
+- `NULLABLE`: field is sometimes `null` and sometimes a consistent non-null type
 - `ALWAYS_NULL`: field is present but always `null`
-- `OPTIONAL`: field is not present in every response
+- `OPTIONAL?`: field is present in some responses but missing in others (`0% < Presence < 100%`)
+- `MISSING`: field never appears in audited responses (`Presence = 0%`)
 - `CONSTANT`: field appears in multiple responses and non-null value does not change
 - `OK`: no warning conditions triggered
 
@@ -134,6 +140,8 @@ This repository includes ready-to-run example files:
 - `examples/samples/response_01.json`
 - `examples/samples/response_02.json`
 - `examples/samples/response_03.json`
+
+The example dataset is intentionally crafted to exercise all main status labels (`MISSING`, `EXTRA`, `TYPE_DRIFT`, `NULLABLE`, `ALWAYS_NULL`, `OPTIONAL?`, `CONSTANT`, `OK`).
 
 Run this command:
 

@@ -69,3 +69,20 @@ def test_generate_report_flags_unstable_when_presence_is_below_full() -> None:
     assert user_email_report.field_audit.occurrence_count == 2
 
 
+def test_generate_report_treats_null_and_single_type_as_nullable_not_drift() -> None:
+    observations_by_response = [
+        [Observation(path="offer.discount", value=10, data_type="int", exists=True)],
+        [Observation(path="offer.discount", value=None, data_type="NoneType", exists=True)],
+        [Observation(path="offer.discount", value=None, data_type="NoneType", exists=True)],
+    ]
+
+    auditor = KolaudaAuditor(observations_by_response)
+    report = auditor.generate_report()
+
+    discount_report = report.by_path["offer.discount"]
+
+    assert discount_report.is_nullable is True
+    assert discount_report.type_drift is False
+    assert discount_report.is_always_null is False
+
+

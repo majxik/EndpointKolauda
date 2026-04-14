@@ -2,11 +2,13 @@
   "meta": {
     "version": "v1"
   },
+  "campaign_discount": null,
   "users": [
     {
       "id": 4,
       "name": "Ada"
     }
-  ]
+  ],
+  "debug": null
 }
 

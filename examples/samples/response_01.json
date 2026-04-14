@@ -2,6 +2,8 @@
   "meta": {
     "version": "v1"
   },
+  "feature_flag": true,
+  "campaign_discount": null,
   "users": [
     {
       "id": 1,

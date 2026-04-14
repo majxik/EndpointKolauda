@@ -1,7 +1,9 @@
 {
   "meta": {
-    "version": "v1"
+    "version": "v1",
+    "build": 42
   },
+  "campaign_discount": 5,
   "users": [
     {
       "id": "3",

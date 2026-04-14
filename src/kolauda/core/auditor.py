@@ -18,6 +18,7 @@ class PathReport:
     field_audit: FieldAudit
     presence_rate: float
     null_rate: float
+    is_nullable: bool
     is_always_null: bool
     is_constant: bool
     type_drift: bool
@@ -68,6 +69,16 @@ class KolaudaAuditor:
                 else 0.0
             )
 
+            non_null_types = {
+                observed_type
+                for observed_type in field_audit.observed_types
+                if observed_type != "NoneType"
+            }
+            is_nullable = (
+                field_audit.null_count > 0
+                and field_audit.null_count < field_audit.occurrence_count
+                and len(non_null_types) <= 1
+            )
             is_always_null = (
                 field_audit.occurrence_count > 0
                 and field_audit.null_count == field_audit.occurrence_count
@@ -77,7 +88,7 @@ class KolaudaAuditor:
                 and field_audit.null_count < field_audit.occurrence_count
                 and len(field_audit.unique_values) == 1
             )
-            type_drift = len(field_audit.observed_types) > 1
+            type_drift = len(non_null_types) > 1
             is_unstable = presence_rate < 1.0
 
             by_path[path] = PathReport(
@@ -85,6 +96,7 @@ class KolaudaAuditor:
                 field_audit=field_audit,
                 presence_rate=presence_rate,
                 null_rate=null_rate,
+                is_nullable=is_nullable,
                 is_always_null=is_always_null,
                 is_constant=is_constant,
                 type_drift=type_drift,
