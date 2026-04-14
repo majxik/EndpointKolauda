@@ -26,7 +26,11 @@ class Observation:
 	@property
 	def type_mismatch(self) -> bool:
 		"""True when expected and observed runtime types do not match."""
-		return self.exists and self.expected_type is not None and self.expected_type != self.data_type
+		return (
+			self.exists
+			and self.expected_type is not None
+			and self.expected_type != self.data_type
+		)
 
 
 class ResponseComparator:

@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "version": "v1"
+  },
+  "users": [
+    {
+      "id": "3",
+      "name": "Linus"
+    }
+  ],
+  "debug": null
+}
+

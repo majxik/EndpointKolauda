@@ -7,6 +7,54 @@ EndpointKolauda is a Python toolkit for auditing JSON fields across multiple API
 - Python `>=3.10` (as defined in `pyproject.toml`)
 - If your IDE shows Python 2.7 warnings (for example about `pathlib`), switch the project interpreter to the repository `.venv` or another Python 3.10+ interpreter.
 
+## Setup
+
+Create and activate a virtual environment (PowerShell):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Install project + dev dependencies:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+Verify interpreter and run tests:
+
+```powershell
+python -c "import sys; print(sys.version)"
+python -m pytest
+```
+
+## Task runner shortcuts
+
+Use the built-in PowerShell task script for common workflows:
+
+```powershell
+.\scripts\tasks.ps1 setup
+.\scripts\tasks.ps1 test
+.\scripts\tasks.ps1 audit-example
+.\scripts\tasks.ps1 lint
+```
+
+If script execution is blocked, run once in your shell session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Optional: if you use `just`, equivalent commands are available via `justfile`:
+
+```powershell
+just setup
+just test
+just audit-example
+just lint
+```
+
 ## Project layout
 
 - `src/kolauda/core/models.py`: Core Pydantic models.
@@ -28,10 +76,74 @@ python -m pytest
 python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.json"
 ```
 
+You can provide `--samples` as:
+
+- a glob pattern (for example `./data/*.json`)
+- a directory path (all `*.json` files in that directory are loaded)
+- a single JSON file path
+
+Windows PowerShell examples:
+
+```powershell
+python -m kolauda.cli.main audit --template .\template.json --samples .\data
+python -m kolauda.cli.main audit --template .\template.json --samples .\data --verbose
+python -m kolauda.cli.main audit --template .\template.json --samples .\data\sample_01.json
+```
+
+If you prefer wildcard input in PowerShell, escape `*` so the shell does not expand it before Typer processes arguments:
+
+```powershell
+python -m kolauda.cli.main audit --template .\template.json --samples .\data\`*.json
+```
+
 Optional output formats:
 
 ```bash
 python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.json" --format json
 python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.json" --format markdown
+```
+
+## Report columns
+
+- `Field Path`: normalized field path (list indexes are normalized as `[]`)
+- `Presence %`: in how many responses the field appears
+- `Null %`: among present observations, how often the value is `null`
+- `Unique Vals`: number of distinct non-null values seen
+- `Status`: derived warnings/health indicator for the field
+
+## Status meanings
+
+- `TYPE_DRIFT`: multiple data types seen for the same field path
+- `ALWAYS_NULL`: field is present but always `null`
+- `OPTIONAL`: field is not present in every response
+- `CONSTANT`: field appears in multiple responses and non-null value does not change
+- `OK`: no warning conditions triggered
+
+## Troubleshooting
+
+- `File not found`: verify `--template` and `--samples` paths are correct.
+- `No sample files found`: check glob syntax and file extension (`.json`).
+- `Invalid JSON`: one of the files is malformed; validate with a JSON linter/editor.
+- IDE warns about Python 2.7 modules: select a Python 3.10+ interpreter for this project.
+
+## Minimal example
+
+This repository includes ready-to-run example files:
+
+- `examples/template.json`
+- `examples/samples/response_01.json`
+- `examples/samples/response_02.json`
+- `examples/samples/response_03.json`
+
+Run this command:
+
+```powershell
+python -m kolauda.cli.main audit --template .\examples\template.json --samples .\examples\samples
+```
+
+You can also inspect machine-friendly output:
+
+```powershell
+python -m kolauda.cli.main audit --template .\examples\template.json --samples .\examples\samples --format json
 ```
 

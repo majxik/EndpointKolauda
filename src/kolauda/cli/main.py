@@ -74,7 +74,9 @@ def audit(
 
     if verbose:
         console.print(
-            f"Processed {len(sample_files)} sample files and {len(report.by_path)} normalized fields."
+            "Processed "
+            f"{len(sample_files)} sample files and "
+            f"{len(report.by_path)} normalized fields."
         )
 
 
@@ -145,7 +147,9 @@ def _render_json(report: AuditReport) -> None:
                 "path": path_report.path,
                 "presence_rate": path_report.presence_rate,
                 "null_rate": path_report.null_rate,
-                "unique_values": sorted(str(value) for value in path_report.field_audit.unique_values),
+                "unique_values": sorted(
+                    str(value) for value in path_report.field_audit.unique_values
+                ),
                 "status": _status_for_path(path_report)[0],
                 "flags": {
                     "is_always_null": path_report.is_always_null,
