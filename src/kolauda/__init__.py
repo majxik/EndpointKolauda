@@ -1,6 +1,14 @@
 """EndpointKolauda library package."""
 
+from kolauda.core.auditor import AuditReport, KolaudaAuditor, PathReport
 from kolauda.core.engine import Observation, ResponseComparator
 from kolauda.core.models import FieldAudit
 
-__all__ = ["FieldAudit", "Observation", "ResponseComparator"]
+__all__ = [
+	"AuditReport",
+	"FieldAudit",
+	"KolaudaAuditor",
+	"Observation",
+	"PathReport",
+	"ResponseComparator",
+]

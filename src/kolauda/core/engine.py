@@ -19,6 +19,11 @@ class Observation:
 	expected_type: str | None = None
 
 	@property
+	def normalized_path(self) -> str:
+		"""Compatibility alias for the normalized path string."""
+		return self.path
+
+	@property
 	def type_mismatch(self) -> bool:
 		"""True when expected and observed runtime types do not match."""
 		return self.exists and self.expected_type is not None and self.expected_type != self.data_type
