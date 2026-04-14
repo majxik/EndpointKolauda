@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "endpointkolauda"
+version = "0.1.0"
+description = "EndpointKolauda: JSON endpoint structure and value auditing toolkit."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.7,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+]
+
+[project.scripts]
+kolauda = "kolauda.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kolauda"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
