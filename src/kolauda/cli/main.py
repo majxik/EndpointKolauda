@@ -47,7 +47,7 @@ def audit(
     """Compare sample responses against a template and print an audit report."""
     try:
         template_data = _load_json_file(template)
-        sample_files = _resolve_sample_files(samples)
+        sample_files = _resolve_sample_files(samples, template_path=template)
     except ValueError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1)
@@ -80,7 +80,7 @@ def audit(
         )
 
 
-def _resolve_sample_files(samples: str) -> list[Path]:
+def _resolve_sample_files(samples: str, template_path: Path | None = None) -> list[Path]:
     sample_path = Path(samples)
     if sample_path.is_dir():
         matched = sorted(sample_path.glob("*.json"))
@@ -88,6 +88,9 @@ def _resolve_sample_files(samples: str) -> list[Path]:
         matched = sorted(Path(path) for path in glob.glob(samples))
 
     files = [path for path in matched if path.is_file()]
+    # Exclude the template file if present in the sample set
+    if template_path is not None:
+        files = [f for f in files if f.resolve() != template_path.resolve()]
     if not files:
         raise ValueError(f"No sample files found for pattern: {samples}")
     return files
