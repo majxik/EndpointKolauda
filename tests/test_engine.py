@@ -1,4 +1,4 @@
-from kolauda.core.engine import ResponseComparator
+from kolauda.core.engine import IssueStatus, ResponseComparator
 
 
 def test_compare_nested_dicts_and_missing_keys() -> None:
@@ -17,6 +17,20 @@ def test_compare_nested_dicts_and_missing_keys() -> None:
 
     assert missing_email_obs.exists is False
     assert missing_email_obs.data_type == "missing"
+    assert missing_email_obs.status == IssueStatus.MISSING
+
+
+def test_compare_detects_extra_keys_not_in_template() -> None:
+    comparator = ResponseComparator()
+    template = {"data": {"user": {"id": 1}}}
+    sample = {"data": {"user": {"id": 7, "internal_id": "abc-123"}}}
+
+    observations = comparator.compare(template, sample)
+    extra_obs = next(obs for obs in observations if obs.path == "data.user.internal_id")
+
+    assert extra_obs.status == IssueStatus.EXTRA
+    assert extra_obs.exists is True
+    assert extra_obs.value == "abc-123"
 
 
 def test_compare_list_of_objects_uses_first_template_item_as_schema() -> None:
@@ -58,4 +72,32 @@ def test_compare_reports_type_mismatches() -> None:
     assert items_obs.expected_type == "list"
     assert items_obs.data_type == "dict"
     assert items_obs.type_mismatch is True
+
+
+def test_compare_preserves_source_filename_for_all_observations() -> None:
+    comparator = ResponseComparator()
+    template = {"data": {"id": 1, "email": "x@example.com"}}
+    sample = {"data": {"id": "one", "extra": True}}
+
+    observations = comparator.compare(
+        template,
+        sample,
+        source_filename="response_01.json",
+    )
+
+    assert observations
+    assert all(obs.source_filename == "response_01.json" for obs in observations)
+
+
+def test_compare_allows_null_without_type_mismatch() -> None:
+    comparator = ResponseComparator()
+    template = {"offer": {"discount": 10}}
+    sample = {"offer": {"discount": None}}
+
+    observations = comparator.compare(template, sample)
+    discount_obs = next(obs for obs in observations if obs.path == "offer.discount")
+
+    assert discount_obs.status == IssueStatus.OK
+    assert discount_obs.type_mismatch is False
+
 

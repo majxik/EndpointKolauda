@@ -13,10 +13,20 @@ from rich.console import Console
 from rich.table import Table
 
 from kolauda.core.auditor import AuditReport, KolaudaAuditor, PathReport
-from kolauda.core.engine import ResponseComparator
+from kolauda.core.engine import IssueStatus, Observation, ResponseComparator
 
 app = typer.Typer(help="EndpointKolauda JSON audit CLI.")
 console = Console()
+
+STATUS_LABEL_ORDER = (
+    "MISSING",
+    "EXTRA",
+    "TYPE_DRIFT",
+    "NULLABLE",
+    "ALWAYS_NULL",
+    "OPTIONAL?",
+    "CONSTANT",
+)
 
 
 @app.callback()
@@ -53,7 +63,8 @@ def audit(
         raise typer.Exit(code=1)
 
     comparator = ResponseComparator()
-    observations_by_response = []
+    observations_by_response: list[list[Observation]] = []
+    audited_filenames = [sample_file.name for sample_file in sample_files]
     for sample_file in sample_files:
         try:
             sample_data = _load_json_file(sample_file)
@@ -61,16 +72,26 @@ def audit(
             console.print(f"[red]{error}[/red]")
             raise typer.Exit(code=1)
 
-        observations_by_response.append(comparator.compare(template_data, sample_data))
+        observations_by_response.append(
+            comparator.compare(
+                template_data,
+                sample_data,
+                source_filename=sample_file.name,
+            )
+        )
 
     report = KolaudaAuditor(observations_by_response).generate_report()
+    all_observations = [obs for response in observations_by_response for obs in response]
+    issue_statuses_by_path = _collect_issue_statuses_by_path(all_observations)
 
     if output_format == OutputFormat.table:
-        _render_table(report)
+        _render_summary(audited_filenames)
+        _render_table(report, issue_statuses_by_path)
+        _render_issue_log(all_observations)
     elif output_format == OutputFormat.json:
-        _render_json(report)
+        _render_json(report, audited_filenames, issue_statuses_by_path)
     else:
-        _render_markdown(report)
+        _render_markdown(report, audited_filenames, issue_statuses_by_path)
 
     if verbose:
         console.print(
@@ -106,21 +127,60 @@ def _load_json_file(path: Path) -> Any:
         raise ValueError(f"Invalid JSON in {path}: {error.msg}") from error
 
 
-def _status_for_path(path_report: PathReport) -> tuple[str, str]:
-    if path_report.type_drift:
-        return "TYPE_DRIFT", "red"
-    if path_report.is_always_null:
-        return "ALWAYS_NULL", "yellow"
-    if path_report.is_unstable and path_report.is_constant:
-        return "OPTIONAL, CONSTANT", "yellow"
-    if path_report.is_unstable:
-        return "OPTIONAL", "yellow"
-    if path_report.is_constant:
-        return "CONSTANT", "yellow"
-    return "OK", "green"
+def _collect_issue_statuses_by_path(observations: list[Observation]) -> dict[str, set[IssueStatus]]:
+    by_path: dict[str, set[IssueStatus]] = {}
+    tracked = {IssueStatus.MISSING, IssueStatus.EXTRA, IssueStatus.TYPE_MISMATCH}
+    for observation in observations:
+        if observation.status not in tracked:
+            continue
+        by_path.setdefault(observation.path, set()).add(observation.status)
+    return by_path
 
 
-def _render_table(report: AuditReport) -> None:
+def _status_for_path(
+    path_report: PathReport,
+    issue_statuses: set[IssueStatus] | None = None,
+) -> tuple[str, str]:
+    issue_statuses = issue_statuses or set()
+    has_missing_events = IssueStatus.MISSING in issue_statuses
+    is_fully_missing = path_report.presence_rate == 0.0 and has_missing_events
+    is_partially_present = 0.0 < path_report.presence_rate < 1.0
+
+    active_labels = {
+        "MISSING": is_fully_missing,
+        "EXTRA": IssueStatus.EXTRA in issue_statuses,
+        "TYPE_DRIFT": IssueStatus.TYPE_MISMATCH in issue_statuses or path_report.type_drift,
+        "NULLABLE": path_report.is_nullable,
+        "ALWAYS_NULL": path_report.is_always_null,
+        "OPTIONAL?": is_partially_present,
+        "CONSTANT": path_report.is_constant,
+    }
+    labels = [label for label in STATUS_LABEL_ORDER if active_labels[label]]
+
+    if not labels:
+        return "OK", "green"
+    if "MISSING" in labels:
+        return ", ".join(labels), "bold red"
+    if "EXTRA" in labels:
+        return ", ".join(labels), "bold magenta"
+    if "TYPE_DRIFT" in labels:
+        return ", ".join(labels), "red"
+    return ", ".join(labels), "yellow"
+
+
+def _render_summary(audited_filenames: list[str]) -> None:
+    filenames = ", ".join(audited_filenames)
+    console.print(
+        f"Audited Files ({len(audited_filenames)}): [{filenames}]",
+        style="bold",
+        markup=False,
+    )
+
+
+def _render_table(
+    report: AuditReport,
+    issue_statuses_by_path: dict[str, set[IssueStatus]],
+) -> None:
     table = Table(title="Kolauda Audit")
     table.add_column("Field Path", style="cyan", no_wrap=True)
     table.add_column("Presence %", justify="right")
@@ -129,7 +189,7 @@ def _render_table(report: AuditReport) -> None:
     table.add_column("Status")
 
     for path, path_report in sorted(report.by_path.items()):
-        status, color = _status_for_path(path_report)
+        status, color = _status_for_path(path_report, issue_statuses_by_path.get(path))
         table.add_row(
             path,
             f"{path_report.presence_rate * 100:.1f}%",
@@ -142,9 +202,14 @@ def _render_table(report: AuditReport) -> None:
     console.print(table)
 
 
-def _render_json(report: AuditReport) -> None:
+def _render_json(
+    report: AuditReport,
+    audited_filenames: list[str],
+    issue_statuses_by_path: dict[str, set[IssueStatus]],
+) -> None:
     payload = {
         "total_responses": report.total_responses,
+        "audited_files": audited_filenames,
         "fields": [
             {
                 "path": path_report.path,
@@ -153,8 +218,12 @@ def _render_json(report: AuditReport) -> None:
                 "unique_values": sorted(
                     str(value) for value in path_report.field_audit.unique_values
                 ),
-                "status": _status_for_path(path_report)[0],
+                "status": _status_for_path(
+                    path_report,
+                    issue_statuses_by_path.get(path_report.path),
+                )[0],
                 "flags": {
+                    "is_nullable": path_report.is_nullable,
                     "is_always_null": path_report.is_always_null,
                     "is_constant": path_report.is_constant,
                     "type_drift": path_report.type_drift,
@@ -167,13 +236,19 @@ def _render_json(report: AuditReport) -> None:
     console.print(json.dumps(payload, indent=2))
 
 
-def _render_markdown(report: AuditReport) -> None:
+def _render_markdown(
+    report: AuditReport,
+    audited_filenames: list[str],
+    issue_statuses_by_path: dict[str, set[IssueStatus]],
+) -> None:
     lines = [
+        f"Audited Files ({len(audited_filenames)}): [{', '.join(audited_filenames)}]",
+        "",
         "| Field Path | Presence % | Null % | Unique Vals | Status |",
         "| --- | ---: | ---: | ---: | --- |",
     ]
     for path, path_report in sorted(report.by_path.items()):
-        status, _ = _status_for_path(path_report)
+        status, _ = _status_for_path(path_report, issue_statuses_by_path.get(path))
         lines.append(
             "| "
             f"{path} | "
@@ -183,6 +258,69 @@ def _render_markdown(report: AuditReport) -> None:
             f"{status} |"
         )
     console.print("\n".join(lines))
+
+
+def _render_issue_log(observations: list[Observation]) -> None:
+    """Print row-level issues after the statistical table."""
+    issue_observations = [
+        obs
+        for obs in observations
+        if obs.status in {IssueStatus.MISSING, IssueStatus.EXTRA, IssueStatus.TYPE_MISMATCH}
+    ]
+
+    issue_table = Table(title="\N{POLICE CARS REVOLVING LIGHT} Detailed Issue Log")
+    issue_table.add_column("File", style="cyan")
+    issue_table.add_column("Issue Type")
+    issue_table.add_column("Field Path", style="white")
+    issue_table.add_column("Context Value")
+
+    grouped: dict[tuple[str, str, str, str], int] = {}
+    for observation in issue_observations:
+        context_value = (
+            "<missing>"
+            if observation.status == IssueStatus.MISSING
+            else repr(observation.value)
+        )
+
+        key = (
+            observation.source_filename or "<unknown>",
+            observation.status.value,
+            observation.path,
+            context_value,
+        )
+        grouped[key] = grouped.get(key, 0) + 1
+
+    for (filename, issue_type, field_path, context_value), count in sorted(
+        grouped.items(),
+        key=lambda item: (item[0][2], item[0][0], item[0][1]),
+    ):
+        status = IssueStatus(issue_type)
+        style = "white"
+        if status == IssueStatus.EXTRA:
+            style = "bold magenta"
+        elif status == IssueStatus.MISSING:
+            style = "bold red"
+        elif status == IssueStatus.TYPE_MISMATCH:
+            style = "yellow"
+
+        context_display = context_value if count == 1 else f"{context_value} (x{count})"
+
+        issue_table.add_row(
+            filename,
+            issue_type,
+            field_path,
+            context_display,
+            style=style,
+        )
+
+    if not issue_observations:
+        console.print(
+            "\N{POLICE CARS REVOLVING LIGHT} Detailed Issue Log: "
+            "no row-level issues detected."
+        )
+        return
+
+    console.print(issue_table)
 
 
 def main() -> None:

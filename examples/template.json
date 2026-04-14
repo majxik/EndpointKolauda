@@ -2,12 +2,15 @@
   "meta": {
     "version": "v1"
   },
+  "required_code": "REQ-001",
+  "feature_flag": true,
+  "campaign_discount": 10,
   "users": [
     {
       "id": 0,
       "name": ""
     }
   ],
-  "debug": null
+  "debug": "trace"
 }
 
