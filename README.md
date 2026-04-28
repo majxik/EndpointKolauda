@@ -126,6 +126,12 @@ UI features in Ticket007 include:
 - Audit table rendered with `st.dataframe`
 - JSON explorer for viewing raw payloads of audited sample files
 
+UI features in Ticket008 include:
+
+- Side-by-side JSON selector (`Template` or sample on left, sample on right)
+- Pairwise diff table that highlights `EXTRA` and `MISSING` field paths
+- Field Details panel with aggregate stats (`Status`, `Presence %`, `Null %`, `Unique Values`, observed types)
+
 ## Report columns
 
 - `Field Path`: normalized field path (list indexes are normalized as `[]`)

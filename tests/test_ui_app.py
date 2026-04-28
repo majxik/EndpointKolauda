@@ -2,7 +2,15 @@ import json
 from pathlib import Path
 
 from kolauda.core.engine import IssueStatus
-from kolauda.ui.app import build_audit_rows, compute_dashboard_metrics, run_audit
+from kolauda.ui.app import (
+    build_audit_rows,
+    build_diff_rows,
+    build_field_details,
+    build_sample_file_map,
+    compute_dashboard_metrics,
+    resolve_json_source,
+    run_audit,
+)
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -58,5 +66,60 @@ def test_ui_metrics_and_rows_include_expected_values(tmp_path: Path) -> None:
     assert metrics.total_errors == 2
     assert any(row["Status"] == "ALWAYS_NULL, OPTIONAL?" for row in rows)
     assert any("EXTRA" in row["Status"] for row in rows)
+
+
+def test_ui_resolve_json_source_supports_template_and_sample(tmp_path: Path) -> None:
+    sample_path = tmp_path / "response.json"
+    _write_json(sample_path, {"ok": True})
+
+    sample_map = build_sample_file_map([sample_path])
+    template_payload = {"template": True}
+
+    template_label, template_data = resolve_json_source("Template", template_payload, sample_map)
+    sample_label, sample_data = resolve_json_source("response.json", template_payload, sample_map)
+
+    assert template_label == "Template"
+    assert template_data == {"template": True}
+    assert sample_label == "response.json"
+    assert sample_data == {"ok": True}
+
+
+def test_ui_build_diff_rows_detects_missing_and_extra_paths() -> None:
+    left_payload = {"product": {"id": 1, "name": "A"}}
+    right_payload = {"product": {"id": 1, "extra": True}}
+
+    diff_rows = build_diff_rows(left_payload, right_payload, "right.json")
+
+    paths_by_type = {(row["Issue Type"], row["Field Path"]) for row in diff_rows}
+    assert ("MISSING", "product.name") in paths_by_type
+    assert ("EXTRA", "product.extra") in paths_by_type
+
+
+def test_ui_build_field_details_exposes_audit_statistics(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.json"
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+
+    _write_json(template_path, {"offer": {"discount": 10}})
+    _write_json(samples_dir / "a.json", {"offer": {"discount": None}})
+    _write_json(samples_dir / "b.json", {"offer": {"discount": 5}})
+
+    report, observations, _ = run_audit(template=template_path, samples=str(samples_dir))
+    issue_statuses_by_path: dict[str, set[IssueStatus]] = {}
+    for observation in observations:
+        if observation.status not in {
+            IssueStatus.MISSING,
+            IssueStatus.EXTRA,
+            IssueStatus.TYPE_MISMATCH,
+        }:
+            continue
+        issue_statuses_by_path.setdefault(observation.path, set()).add(observation.status)
+
+    details = build_field_details("offer.discount", report, issue_statuses_by_path)
+
+    assert details is not None
+    assert details.status == "NULLABLE, CONSTANT"
+    assert details.presence_percent == 100.0
+    assert details.null_percent == 50.0
 
 
