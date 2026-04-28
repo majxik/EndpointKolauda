@@ -18,6 +18,9 @@ dist/
 # IDE files
 .idea/
 
+# Local notes and ticket drafts
+/Tickets/
+
 # Include /PrivateArea folder but exclude its contents
 !/PrivateArea/
 /PrivateArea/*
