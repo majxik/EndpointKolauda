@@ -38,6 +38,39 @@ class FieldDetails:
     observed_types: str
 
 
+def minimal_plus_tab_labels() -> tuple[str, str, str, str]:
+    """Return the fixed Minimal+ tab order used by the dashboard."""
+    return ("Overview", "Diff", "Raw JSON", "History")
+
+
+def resolve_base_directory(base_path: str) -> Path:
+    """Resolve a user-provided base path to an existing directory."""
+    candidate = Path(base_path).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return candidate.resolve()
+    return Path.cwd().resolve()
+
+
+def list_picker_entries(directory: Path) -> tuple[list[Path], list[Path]]:
+    """Return sorted subdirectories and JSON files for picker navigation."""
+    try:
+        entries = list(directory.iterdir())
+    except (FileNotFoundError, PermissionError, OSError):
+        return [], []
+
+    directories = sorted((entry for entry in entries if entry.is_dir()), key=lambda path: path.name.lower())
+    json_files = sorted(
+        (entry for entry in entries if entry.is_file() and entry.suffix.lower() == ".json"),
+        key=lambda path: path.name.lower(),
+    )
+    return directories, json_files
+
+
+def to_display_path(path: Path) -> str:
+    """Render filesystem paths for UI controls in a consistent way."""
+    return str(path.resolve())
+
+
 def run_audit(template: Path, samples: str) -> tuple[AuditReport, list[Observation], list[Path]]:
     """Execute the standard audit flow and return report data for the UI."""
     template_data = _load_json_file(template)
@@ -186,10 +219,104 @@ def main() -> None:
     st.set_page_config(page_title="EndpointKolauda", page_icon="K", layout="wide")
     st.title("EndpointKolauda Dashboard")
 
+    if "template_path_input" not in st.session_state:
+        st.session_state.template_path_input = "examples/template.json"
+    if "samples_path_input" not in st.session_state:
+        st.session_state.samples_path_input = "examples/samples"
+    if "picker_base_path" not in st.session_state:
+        st.session_state.picker_base_path = "."
+    if "picker_current_dir" not in st.session_state:
+        st.session_state.picker_current_dir = to_display_path(resolve_base_directory("."))
+    if "pending_template_path" not in st.session_state:
+        st.session_state.pending_template_path = None
+    if "pending_samples_path" not in st.session_state:
+        st.session_state.pending_samples_path = None
+
+    # Apply picker selections before rendering widget-bound path inputs.
+    if st.session_state.pending_template_path is not None:
+        st.session_state.template_path_input = st.session_state.pending_template_path
+        st.session_state.pending_template_path = None
+    if st.session_state.pending_samples_path is not None:
+        st.session_state.samples_path_input = st.session_state.pending_samples_path
+        st.session_state.pending_samples_path = None
+
     with st.sidebar:
         st.header("Inputs")
-        template_path_input = st.text_input("Template File Path", value="examples/template.json")
-        samples_path_input = st.text_input("Samples Directory Path", value="examples/samples")
+        st.text_input("Template File Path", key="template_path_input")
+        st.text_input("Samples Directory Path", key="samples_path_input")
+
+        with st.expander("Path Picker", expanded=False):
+            st.caption("Browse and select paths instead of typing them manually.")
+            st.text_input("Picker Base Path", key="picker_base_path")
+
+            if st.button("Go To Base", key="picker_go_to_base"):
+                base_dir = resolve_base_directory(st.session_state.picker_base_path)
+                st.session_state.picker_current_dir = to_display_path(base_dir)
+
+            current_dir = resolve_base_directory(st.session_state.picker_current_dir)
+            st.session_state.picker_current_dir = to_display_path(current_dir)
+            st.caption(f"Current Folder: {st.session_state.picker_current_dir}")
+
+            nav_col1, nav_col2 = st.columns(2)
+            if nav_col1.button("Up", key="picker_up"):
+                st.session_state.picker_current_dir = to_display_path(current_dir.parent)
+                current_dir = resolve_base_directory(st.session_state.picker_current_dir)
+            if nav_col2.button("Refresh", key="picker_refresh"):
+                current_dir = resolve_base_directory(st.session_state.picker_current_dir)
+
+            directories, json_files = list_picker_entries(current_dir)
+
+            if directories:
+                selected_directory_name = st.selectbox(
+                    "Subfolders",
+                    options=[directory.name for directory in directories],
+                    key="picker_selected_subfolder",
+                )
+                if st.button("Open Folder", key="picker_open_folder"):
+                    selected_directory = next(
+                        directory
+                        for directory in directories
+                        if directory.name == selected_directory_name
+                    )
+                    st.session_state.picker_current_dir = to_display_path(selected_directory)
+                    current_dir = selected_directory
+            else:
+                st.caption("No subfolders in current directory.")
+
+            if json_files:
+                selected_template_name = st.selectbox(
+                    "Template JSON",
+                    options=[file.name for file in json_files],
+                    key="picker_selected_template",
+                )
+                if st.button("Use As Template", key="picker_use_template"):
+                    selected_template = next(
+                        json_file
+                        for json_file in json_files
+                        if json_file.name == selected_template_name
+                    )
+                    st.session_state.pending_template_path = to_display_path(selected_template)
+                    st.rerun()
+            else:
+                st.caption("No JSON files in current directory.")
+
+            sample_dir_choices = [current_dir, *directories]
+            selected_samples_name = st.selectbox(
+                "Samples Directory",
+                options=[directory.name for directory in sample_dir_choices],
+                key="picker_selected_samples_directory",
+            )
+            if st.button("Use As Samples", key="picker_use_samples"):
+                selected_samples_dir = next(
+                    directory
+                    for directory in sample_dir_choices
+                    if directory.name == selected_samples_name
+                )
+                st.session_state.pending_samples_path = to_display_path(selected_samples_dir)
+                st.rerun()
+
+        template_path_input = st.session_state.template_path_input
+        samples_path_input = st.session_state.samples_path_input
         run_clicked = st.button("Run Kolauda", type="primary", use_container_width=True)
 
     if "last_result" not in st.session_state:
@@ -232,86 +359,96 @@ def main() -> None:
     template_payload: Any = result["template_payload"]
     metrics: DashboardMetrics = result["metrics"]
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Files", metrics.total_files)
-    col2.metric("Total Errors", metrics.total_errors)
-    col3.metric("Healthy Fields %", f"{metrics.healthy_fields_percent:.1f}%")
+    overview_tab, diff_tab, raw_json_tab, history_tab = st.tabs(list(minimal_plus_tab_labels()))
 
-    st.subheader("Audit Table")
-    st.dataframe(build_audit_rows(report, issue_statuses_by_path), use_container_width=True)
+    with overview_tab:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Files", metrics.total_files)
+        col2.metric("Total Errors", metrics.total_errors)
+        col3.metric("Healthy Fields %", f"{metrics.healthy_fields_percent:.1f}%")
 
-    st.subheader("JSON Explorer")
-    selected_sample = st.selectbox("Select sample file", options=sample_files, format_func=lambda p: p.name)
-    try:
-        sample_payload = load_sample_json(selected_sample)
-        st.code(json.dumps(sample_payload, indent=2), language="json")
-    except ValueError as error:
-        st.error(str(error))
+        st.subheader("Audit Table")
+        st.dataframe(build_audit_rows(report, issue_statuses_by_path), use_container_width=True)
 
-    st.subheader("Side-by-Side JSON Diff Viewer")
-    sample_file_map = build_sample_file_map(sample_files)
-    sample_names = sorted(sample_file_map.keys())
+    with diff_tab:
+        st.subheader("Side-by-Side JSON Diff Viewer")
+        sample_file_map = build_sample_file_map(sample_files)
+        sample_names = sorted(sample_file_map.keys())
 
-    if not sample_names:
-        st.info("No sample files available for diff view.")
-        return
+        if not sample_names:
+            st.info("No sample files available for diff view.")
+        else:
+            diff_selector_left, diff_selector_right = st.columns(2)
+            left_choice = diff_selector_left.selectbox(
+                "Left source",
+                options=["Template", *sample_names],
+                index=0,
+                help="Baseline JSON. Defaults to template, but you can select a sample file.",
+            )
+            right_choice = diff_selector_right.selectbox(
+                "Right source",
+                options=sample_names,
+                index=0,
+                help="Comparison JSON file.",
+            )
 
-    diff_selector_left, diff_selector_right = st.columns(2)
-    left_choice = diff_selector_left.selectbox(
-        "Left source",
-        options=["Template", *sample_names],
-        index=0,
-        help="Baseline JSON. Defaults to template, but you can select a sample file.",
-    )
-    right_choice = diff_selector_right.selectbox(
-        "Right source",
-        options=sample_names,
-        index=0,
-        help="Comparison JSON file.",
-    )
+            try:
+                left_label, left_payload = resolve_json_source(left_choice, template_payload, sample_file_map)
+                right_label, right_payload = resolve_json_source(right_choice, template_payload, sample_file_map)
+                left_col, right_col = st.columns(2)
+                left_col.markdown(f"**Left: {left_label}**")
+                left_col.code(json.dumps(left_payload, indent=2), language="json")
+                right_col.markdown(f"**Right: {right_label}**")
+                right_col.code(json.dumps(right_payload, indent=2), language="json")
 
-    try:
-        left_label, left_payload = resolve_json_source(left_choice, template_payload, sample_file_map)
-        right_label, right_payload = resolve_json_source(right_choice, template_payload, sample_file_map)
-    except ValueError as error:
-        st.error(str(error))
-        return
+                diff_rows = build_diff_rows(left_payload, right_payload, right_label)
+                st.markdown("**Highlighted EXTRA/MISSING Paths**")
+                if diff_rows:
+                    st.dataframe(diff_rows, use_container_width=True)
+                else:
+                    st.success("No EXTRA/MISSING differences found for this comparison.")
 
-    left_col, right_col = st.columns(2)
-    left_col.markdown(f"**Left: {left_label}**")
-    left_col.code(json.dumps(left_payload, indent=2), language="json")
-    right_col.markdown(f"**Right: {right_label}**")
-    right_col.code(json.dumps(right_payload, indent=2), language="json")
+                st.markdown("**Field Details**")
+                field_options = sorted({*report.by_path.keys(), *(row["Field Path"] for row in diff_rows)})
+                if not field_options:
+                    st.info("No field paths available.")
+                else:
+                    selected_field = st.selectbox(
+                        "Select a field to inspect",
+                        options=field_options,
+                        help="Choose a path from the audit model to inspect cross-file statistics.",
+                    )
+                    details = build_field_details(selected_field, report, issue_statuses_by_path)
+                    if details is None:
+                        st.info(
+                            "This path exists in the pair diff but has no aggregate stats in the current audit report."
+                        )
+                    else:
+                        details_col1, details_col2, details_col3, details_col4 = st.columns(4)
+                        details_col1.metric("Status", details.status)
+                        details_col2.metric("Presence %", f"{details.presence_percent:.1f}%")
+                        details_col3.metric("Null %", f"{details.null_percent:.1f}%")
+                        details_col4.metric("Unique Values", details.unique_values)
+                        st.caption(f"Observed types: {details.observed_types}")
+            except ValueError as error:
+                st.error(str(error))
 
-    diff_rows = build_diff_rows(left_payload, right_payload, right_label)
-    st.markdown("**Highlighted EXTRA/MISSING Paths**")
-    if diff_rows:
-        st.dataframe(diff_rows, use_container_width=True)
-    else:
-        st.success("No EXTRA/MISSING differences found for this comparison.")
+    with raw_json_tab:
+        st.subheader("JSON Explorer")
+        selected_sample = st.selectbox(
+            "Select sample file",
+            options=sample_files,
+            format_func=lambda p: p.name,
+        )
+        try:
+            sample_payload = load_sample_json(selected_sample)
+            st.code(json.dumps(sample_payload, indent=2), language="json")
+        except ValueError as error:
+            st.error(str(error))
 
-    st.markdown("**Field Details**")
-    field_options = sorted({*report.by_path.keys(), *(row["Field Path"] for row in diff_rows)})
-    if not field_options:
-        st.info("No field paths available.")
-        return
-
-    selected_field = st.selectbox(
-        "Select a field to inspect",
-        options=field_options,
-        help="Choose a path from the audit model to inspect cross-file statistics.",
-    )
-    details = build_field_details(selected_field, report, issue_statuses_by_path)
-    if details is None:
-        st.info("This path exists in the pair diff but has no aggregate stats in the current audit report.")
-        return
-
-    details_col1, details_col2, details_col3, details_col4 = st.columns(4)
-    details_col1.metric("Status", details.status)
-    details_col2.metric("Presence %", f"{details.presence_percent:.1f}%")
-    details_col3.metric("Null %", f"{details.null_percent:.1f}%")
-    details_col4.metric("Unique Values", details.unique_values)
-    st.caption(f"Observed types: {details.observed_types}")
+    with history_tab:
+        st.subheader("History")
+        st.info("History and persistence are planned for Ticket009.")
 
 
 if __name__ == "__main__":

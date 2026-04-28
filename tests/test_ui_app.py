@@ -8,6 +8,9 @@ from kolauda.ui.app import (
     build_field_details,
     build_sample_file_map,
     compute_dashboard_metrics,
+    list_picker_entries,
+    minimal_plus_tab_labels,
+    resolve_base_directory,
     resolve_json_source,
     run_audit,
 )
@@ -121,5 +124,32 @@ def test_ui_build_field_details_exposes_audit_statistics(tmp_path: Path) -> None
     assert details.status == "NULLABLE, CONSTANT"
     assert details.presence_percent == 100.0
     assert details.null_percent == 50.0
+
+
+def test_ui_minimal_plus_tab_labels_match_expected_order() -> None:
+    assert minimal_plus_tab_labels() == ("Overview", "Diff", "Raw JSON", "History")
+
+
+def test_ui_resolve_base_directory_returns_existing_dir(tmp_path: Path) -> None:
+    resolved = resolve_base_directory(str(tmp_path))
+    assert resolved == tmp_path.resolve()
+
+
+def test_ui_resolve_base_directory_falls_back_when_missing() -> None:
+    missing = "Z:/this/path/should/not/exist/for/kolauda"
+    resolved = resolve_base_directory(missing)
+    assert resolved == Path.cwd().resolve()
+
+
+def test_ui_list_picker_entries_returns_dirs_and_json_only(tmp_path: Path) -> None:
+    subdir = tmp_path / "samples"
+    subdir.mkdir()
+    _write_json(tmp_path / "template.json", {"ok": True})
+    (tmp_path / "notes.txt").write_text("skip", encoding="utf-8")
+
+    directories, json_files = list_picker_entries(tmp_path)
+
+    assert [directory.name for directory in directories] == ["samples"]
+    assert [json_file.name for json_file in json_files] == ["template.json"]
 
 

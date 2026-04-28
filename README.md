@@ -132,6 +132,13 @@ UI features in Ticket008 include:
 - Pairwise diff table that highlights `EXTRA` and `MISSING` field paths
 - Field Details panel with aggregate stats (`Status`, `Presence %`, `Null %`, `Unique Values`, observed types)
 
+UI features in Ticket010 include:
+
+- Minimal+ tab layout: `Overview`, `Diff`, `Raw JSON`, `History`
+- Shared sidebar controls across tabs (template path, samples path, run action)
+- In-app sidebar path picker for browsing folders and selecting template/samples paths
+- `History` tab placeholder ready for Ticket009 persistence/history work
+
 ## Report columns
 
 - `Field Path`: normalized field path (list indexes are normalized as `[]`)
