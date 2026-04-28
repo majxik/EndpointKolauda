@@ -22,6 +22,12 @@ Install project + dev dependencies:
 python -m pip install -e ".[dev]"
 ```
 
+Install Streamlit UI dependencies (optional):
+
+```powershell
+python -m pip install -e ".[ui]"
+```
+
 Verify interpreter and run tests:
 
 ```powershell
@@ -61,6 +67,7 @@ just lint
 - `src/kolauda/core/engine.py`: Recursive template/sample comparator.
 - `src/kolauda/core/auditor.py`: Observation aggregator and statistical analyzer.
 - `src/kolauda/cli/main.py`: Typer CLI for running audits.
+- `src/kolauda/ui/app.py`: Streamlit dashboard for visual audit exploration.
 - `tests/`: Pytest suite for models, comparator, auditor, and CLI.
 
 ## Quick start
@@ -102,6 +109,22 @@ Optional output formats:
 python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.json" --format json
 python -m kolauda.cli.main audit --template ./template.json --samples "./data/*.json" --format markdown
 ```
+
+## Run the Streamlit UI
+
+Start the dashboard with:
+
+```powershell
+python -m streamlit run .\src\kolauda\ui\app.py
+```
+
+UI features in Ticket007 include:
+
+- Sidebar inputs for template path and samples path
+- `Run Kolauda` action that executes the same core audit engine as CLI
+- Top metric cards (`Total Files`, `Total Errors`, `Healthy Fields %`)
+- Audit table rendered with `st.dataframe`
+- JSON explorer for viewing raw payloads of audited sample files
 
 ## Report columns
 
