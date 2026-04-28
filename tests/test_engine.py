@@ -101,3 +101,16 @@ def test_compare_allows_null_without_type_mismatch() -> None:
     assert discount_obs.type_mismatch is False
 
 
+def test_compare_emits_parent_observation_for_dict_values() -> None:
+    comparator = ResponseComparator()
+    template = {"product": {"productLine": {"name": "", "urlPath": ""}}}
+    sample = {"product": {"productLine": {"name": "Ibuprofen", "urlPath": ""}}}
+
+    observations = comparator.compare(template, sample)
+    product_line_obs = next(obs for obs in observations if obs.path == "product.productLine")
+
+    assert product_line_obs.exists is True
+    assert product_line_obs.data_type == "dict"
+    assert product_line_obs.status == IssueStatus.OK
+
+

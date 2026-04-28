@@ -107,6 +107,17 @@ class ResponseComparator:
 			]
 
 		observations: list[Observation] = []
+		if path:
+			observations.append(
+				self._make_observation(
+					path=path,
+					value=sample,
+					exists=True,
+					expected_type="dict",
+					status=IssueStatus.OK,
+					source_filename=source_filename,
+				)
+			)
 		for key, template_value in template.items():
 			child_path = path + (key,)
 			if key not in sample:
@@ -164,6 +175,17 @@ class ResponseComparator:
 			]
 
 		observations: list[Observation] = []
+		if path:
+			observations.append(
+				self._make_observation(
+					path=path,
+					value=sample,
+					exists=True,
+					expected_type="list",
+					status=IssueStatus.OK,
+					source_filename=source_filename,
+				)
+			)
 		if not template:
 			for index, item in enumerate(sample):
 				observations.extend(

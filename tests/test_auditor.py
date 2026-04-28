@@ -86,3 +86,28 @@ def test_generate_report_treats_null_and_single_type_as_nullable_not_drift() -> 
     assert discount_report.is_always_null is False
 
 
+def test_generate_report_marks_parent_path_nullable_for_null_vs_object() -> None:
+    observations_by_response = [
+        [Observation(path="product.productLine", value=None, data_type="NoneType", exists=True)],
+        [
+            Observation(
+                path="product.productLine",
+                value={"name": "Ibuprofen", "urlPath": ""},
+                data_type="dict",
+                exists=True,
+            )
+        ],
+    ]
+
+    auditor = KolaudaAuditor(observations_by_response)
+    report = auditor.generate_report()
+
+    product_line_report = report.by_path["product.productLine"]
+
+    assert product_line_report.presence_rate == 1.0
+    assert product_line_report.null_rate == 0.5
+    assert product_line_report.is_nullable is True
+    assert product_line_report.is_always_null is False
+    assert product_line_report.is_unstable is False
+
+

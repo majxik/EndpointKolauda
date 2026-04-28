@@ -189,3 +189,32 @@ def test_cli_main_table_covers_all_status_labels(tmp_path: Path) -> None:
     assert "OK" in result.output
 
 
+def test_cli_parent_object_null_vs_object_is_reported_nullable(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.json"
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+
+    _write_json(template_path, {"product": {"productLine": {"name": "", "urlPath": ""}}})
+    _write_json(samples_dir / "a.json", {"product": {"productLine": None}})
+    _write_json(
+        samples_dir / "b.json",
+        {"product": {"productLine": {"name": "Ibuprofen", "urlPath": ""}}},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "audit",
+            "--template",
+            str(template_path),
+            "--samples",
+            str(samples_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "product.productLine" in result.output
+    assert "NULLABLE" in result.output
+    assert "product.productLine                       │      50.0% │ 100.0%" not in result.output
+
+
