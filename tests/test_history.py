@@ -126,3 +126,18 @@ def test_history_validate_rejects_unsupported_schema_version() -> None:
         assert "Unsupported history schema version" in str(error)
 
 
+def test_history_load_entries_supports_recursive_and_max_entries(tmp_path: Path) -> None:
+    history_dir = tmp_path / "history"
+    nested_dir = history_dir / "nested"
+
+    save_history_entry(_entry("a", "2026-04-29T09:00:00+00:00"), history_dir)
+    save_history_entry(_entry("b", "2026-04-29T10:00:00+00:00"), nested_dir)
+    save_history_entry(_entry("c", "2026-04-29T11:00:00+00:00"), nested_dir)
+
+    non_recursive = load_history_entries(history_dir)
+    recursive_limited = load_history_entries(history_dir, recursive=True, max_entries=2)
+
+    assert [entry["audit_id"] for entry in non_recursive] == ["a"]
+    assert [entry["audit_id"] for entry in recursive_limited] == ["b", "c"]
+
+

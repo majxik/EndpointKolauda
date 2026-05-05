@@ -152,6 +152,9 @@ UI features in Ticket011 (MVP) include:
 - Backward-compatible loading for older history snapshot schema
 - History filters by endpoint and optional UTC date range
 - Trend metric selector in History tab (`Total Errors` or `Healthy Fields %`)
+- Configurable History directory with optional subfolder scan
+- Snapshot load limit control for large history collections
+- Optional metric threshold filters (`Min Total Errors`, `Max Healthy Fields %`)
 
 ## Report columns
 

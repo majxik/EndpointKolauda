@@ -204,6 +204,33 @@ def test_ui_history_chart_rows_for_metric_uses_selected_metric() -> None:
     assert rows[0]["Endpoint"] == "endpoint-a"
 
 
+def test_ui_filter_history_entries_supports_metric_thresholds() -> None:
+    entries = [
+        {
+            "timestamp_utc": "2026-05-01T12:00:00+00:00",
+            "metadata": {"endpoint_key": "endpoint-a"},
+            "metrics": {"total_errors": 1, "healthy_fields_percent": 99.0},
+        },
+        {
+            "timestamp_utc": "2026-05-02T12:00:00+00:00",
+            "metadata": {"endpoint_key": "endpoint-a"},
+            "metrics": {"total_errors": 7, "healthy_fields_percent": 65.0},
+        },
+    ]
+
+    filtered = filter_history_entries(
+        entries,
+        endpoint_key="endpoint-a",
+        start_timestamp_utc="",
+        end_timestamp_utc="",
+        min_total_errors=5,
+        max_healthy_fields_percent=80.0,
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["metrics"]["total_errors"] == 7
+
+
 def test_ui_build_overview_issue_rows_extracts_extra_and_missing() -> None:
     summary = build_overview_issue_rows(
         [

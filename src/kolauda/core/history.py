@@ -98,18 +98,26 @@ def load_history_entry(path: Path) -> dict[str, Any]:
     return validate_history_entry(payload)
 
 
-def load_history_entries(history_dir: Path) -> list[dict[str, Any]]:
-    """Load all valid history entries from a directory, sorted by timestamp."""
+def load_history_entries(
+    history_dir: Path,
+    *,
+    recursive: bool = False,
+    max_entries: int | None = None,
+) -> list[dict[str, Any]]:
+    """Load valid history entries from a directory, optionally recursive and limited."""
     if not history_dir.exists() or not history_dir.is_dir():
         return []
 
+    glob_pattern = "**/*.json" if recursive else "*.json"
     loaded: list[dict[str, Any]] = []
-    for file_path in sorted(history_dir.glob("*.json")):
+    for file_path in sorted(history_dir.glob(glob_pattern)):
         try:
             loaded.append(load_history_entry(file_path))
         except ValueError:
             continue
 
     loaded.sort(key=lambda entry: str(entry.get("timestamp_utc", "")))
+    if max_entries is not None and max_entries > 0:
+        loaded = loaded[-max_entries:]
     return loaded
 
