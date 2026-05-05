@@ -11,13 +11,19 @@ from kolauda.core.history import (
 
 def _entry(audit_id: str, timestamp: str) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "audit_id": audit_id,
         "timestamp_utc": timestamp,
         "inputs": {
             "template_path": "template.json",
             "samples_path": "samples",
             "sample_files": ["a.json"],
+        },
+        "metadata": {
+            "endpoint_key": "samples",
+            "endpoint_label": "",
+            "environment": "",
+            "notes": "",
         },
         "metrics": {
             "total_files": 1,
@@ -93,6 +99,30 @@ def test_history_file_is_json_serializable(tmp_path: Path) -> None:
     saved_path = save_history_entry(entry, history_dir)
     parsed = json.loads(saved_path.read_text(encoding="utf-8"))
 
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == 2
     assert parsed["sample_payloads"]["a.json"]["ok"] is True
+
+
+def test_history_validate_legacy_schema_version_is_supported() -> None:
+    legacy = _entry("legacy", "2026-04-29T12:00:00+00:00")
+    legacy["schema_version"] = 1
+    legacy.pop("metadata")
+    legacy["inputs"]["samples_path"] = "PrivateArea/201771-LS-Price"
+
+    validated = validate_history_entry(legacy)
+
+    assert validated["schema_version"] == 2
+    assert validated["metadata"]["endpoint_key"] == "201771-LS-Price"
+
+
+def test_history_validate_rejects_unsupported_schema_version() -> None:
+    payload = _entry("bad", "2026-04-29T12:00:00+00:00")
+    payload["schema_version"] = 99
+
+    try:
+        validate_history_entry(payload)
+        assert False, "Expected ValueError for unsupported schema"
+    except ValueError as error:
+        assert "Unsupported history schema version" in str(error)
+
 

@@ -6,9 +6,12 @@ from kolauda.ui.app import (
     build_audit_rows,
     build_diff_rows,
     build_field_details,
+    build_overview_issue_rows,
     build_sample_file_map,
     compute_dashboard_metrics,
+    filter_history_entries,
     has_live_result,
+    history_chart_rows_for_metric,
     list_picker_entries,
     minimal_plus_tab_labels,
     resolve_base_directory,
@@ -157,5 +160,64 @@ def test_ui_list_picker_entries_returns_dirs_and_json_only(tmp_path: Path) -> No
 
     assert [directory.name for directory in directories] == ["samples"]
     assert [json_file.name for json_file in json_files] == ["template.json"]
+
+
+def test_ui_filter_history_entries_filters_by_endpoint_and_time() -> None:
+    entries = [
+        {
+            "timestamp_utc": "2026-05-01T12:00:00+00:00",
+            "metadata": {"endpoint_key": "endpoint-a"},
+            "metrics": {"total_errors": 3, "healthy_fields_percent": 80.0},
+        },
+        {
+            "timestamp_utc": "2026-05-04T12:00:00+00:00",
+            "metadata": {"endpoint_key": "endpoint-b"},
+            "metrics": {"total_errors": 1, "healthy_fields_percent": 95.0},
+        },
+    ]
+
+    filtered = filter_history_entries(
+        entries,
+        endpoint_key="endpoint-a",
+        start_timestamp_utc="2026-05-01T00:00:00+00:00",
+        end_timestamp_utc="2026-05-03T23:59:59+00:00",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["metadata"]["endpoint_key"] == "endpoint-a"
+
+
+def test_ui_history_chart_rows_for_metric_uses_selected_metric() -> None:
+    rows = history_chart_rows_for_metric(
+        [
+            {
+                "timestamp_utc": "2026-05-01T12:00:00+00:00",
+                "metadata": {"endpoint_key": "endpoint-a"},
+                "metrics": {"total_errors": 2, "healthy_fields_percent": 75.5},
+            }
+        ],
+        metric_key="healthy_fields_percent",
+    )
+
+    assert rows[0]["Timestamp"] == "2026-05-01T12:00:00+00:00"
+    assert rows[0]["Healthy Fields %"] == 75.5
+    assert rows[0]["Endpoint"] == "endpoint-a"
+
+
+def test_ui_build_overview_issue_rows_extracts_extra_and_missing() -> None:
+    summary = build_overview_issue_rows(
+        [
+            {"Field Path": "a.b", "Status": "EXTRA"},
+            {"Field Path": "x.y", "Status": "MISSING, OPTIONAL?"},
+            {"Field Path": "k.z", "Status": "EXTRA, MISSING"},
+            {"Field Path": "ok", "Status": "OK"},
+        ]
+    )
+
+    assert {row["Issue Type"] for row in summary} == {"EXTRA", "MISSING"}
+    assert any(row["Field Path"] == "a.b" and row["Issue Type"] == "EXTRA" for row in summary)
+    assert any(row["Field Path"] == "x.y" and row["Issue Type"] == "MISSING" for row in summary)
+    assert any(row["Field Path"] == "k.z" and row["Issue Type"] == "EXTRA" for row in summary)
+    assert any(row["Field Path"] == "k.z" and row["Issue Type"] == "MISSING" for row in summary)
 
 
