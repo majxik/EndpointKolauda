@@ -137,7 +137,14 @@ UI features in Ticket010 include:
 - Minimal+ tab layout: `Overview`, `Diff`, `Raw JSON`, `History`
 - Shared sidebar controls across tabs (template path, samples path, run action)
 - In-app sidebar path picker for browsing folders and selecting template/samples paths
-- `History` tab placeholder ready for Ticket009 persistence/history work
+
+UI features in Ticket009 include:
+
+- Automatic snapshot persistence for each audit run into `.kolauda/history/*.json`
+- `History` tab trend chart for `Error Count over Time`
+- Historical snapshot selector with metrics + audit table preview
+- Historical diff and field-details inspector (same style as live `Diff` tab)
+- Load a saved audit JSON from disk (path input or file upload) and restore it into main tabs
 
 ## Report columns
 
