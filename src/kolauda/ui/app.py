@@ -393,8 +393,10 @@ def filter_history_entries(
     endpoint_key: str,
     start_timestamp_utc: str,
     end_timestamp_utc: str,
+    min_total_errors: int | None = None,
+    max_healthy_fields_percent: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Filter history entries by endpoint and optional UTC timestamp bounds."""
+    """Filter history entries by endpoint, time range, and optional metric thresholds."""
     selected_endpoint = endpoint_key.strip()
     start_dt = _parse_iso_timestamp(start_timestamp_utc)
     end_dt = _parse_iso_timestamp(end_timestamp_utc)
@@ -410,6 +412,15 @@ def filter_history_entries(
         if start_dt is not None and (timestamp_dt is None or timestamp_dt < start_dt):
             continue
         if end_dt is not None and (timestamp_dt is None or timestamp_dt > end_dt):
+            continue
+
+        metrics = entry.get("metrics", {})
+        total_errors = int(metrics.get("total_errors", 0))
+        healthy_fields_percent = float(metrics.get("healthy_fields_percent", 0.0))
+
+        if min_total_errors is not None and total_errors < min_total_errors:
+            continue
+        if max_healthy_fields_percent is not None and healthy_fields_percent > max_healthy_fields_percent:
             continue
 
         filtered.append(entry)
@@ -713,7 +724,27 @@ def main() -> None:
 
     with history_tab:
         st.subheader("History")
-        history_dir = default_history_directory()
+        history_dir_default = default_history_directory()
+        history_dir_input = st.text_input(
+            "History Directory",
+            value=to_display_path(history_dir_default),
+            key="history_dir_input",
+        )
+        history_recursive_scan = st.checkbox(
+            "Include subfolders",
+            value=False,
+            key="history_recursive_scan",
+        )
+        max_history_entries = st.number_input(
+            "Max snapshots to load",
+            min_value=50,
+            max_value=5000,
+            value=1000,
+            step=50,
+            key="history_max_entries",
+        )
+
+        history_dir = Path(history_dir_input).expanduser()
         st.caption(f"History directory: {to_display_path(history_dir)}")
 
         load_col1, load_col2 = st.columns([3, 1])
@@ -756,7 +787,15 @@ def main() -> None:
             except (ValueError, json.JSONDecodeError) as error:
                 st.error(f"Invalid uploaded history file: {error}")
 
-        disk_entries = load_history_entries(history_dir)
+        try:
+            disk_entries = load_history_entries(
+                history_dir,
+                recursive=history_recursive_scan,
+                max_entries=int(max_history_entries),
+            )
+        except TypeError:
+            # Compatibility path for stale environments still using old helper signatures.
+            disk_entries = load_history_entries(history_dir)
         entries_by_id: dict[str, dict[str, Any]] = {}
         for entry in [*disk_entries, *st.session_state.history_external_entries]:
             audit_id = str(entry.get("audit_id", ""))
@@ -792,11 +831,37 @@ def main() -> None:
             placeholder="2026-05-31T23:59:59+00:00",
         )
 
+        threshold_col1, threshold_col2 = st.columns(2)
+        min_total_errors_raw = threshold_col1.number_input(
+            "Min Total Errors",
+            min_value=0,
+            value=0,
+            step=1,
+            key="history_filter_min_total_errors",
+        )
+        max_healthy_percent_raw = threshold_col2.number_input(
+            "Max Healthy Fields %",
+            min_value=0.0,
+            max_value=100.0,
+            value=100.0,
+            step=1.0,
+            key="history_filter_max_healthy_percent",
+        )
+
+        min_total_errors = int(min_total_errors_raw) if int(min_total_errors_raw) > 0 else None
+        max_healthy_percent = (
+            float(max_healthy_percent_raw)
+            if float(max_healthy_percent_raw) < 100.0
+            else None
+        )
+
         filtered_entries = filter_history_entries(
             all_entries,
             endpoint_key=selected_endpoint,
             start_timestamp_utc=start_timestamp,
             end_timestamp_utc=end_timestamp,
+            min_total_errors=min_total_errors,
+            max_healthy_fields_percent=max_healthy_percent,
         )
         if not filtered_entries:
             st.info("No snapshots match the selected endpoint/date filters.")
