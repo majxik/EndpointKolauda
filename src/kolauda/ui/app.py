@@ -530,6 +530,8 @@ def main() -> None:
         st.session_state.history_external_entries = []
     if "last_result" not in st.session_state:
         st.session_state.last_result = None
+    if "last_saved_snapshot_name" not in st.session_state:
+        st.session_state.last_saved_snapshot_name = ""
 
     # Apply picker selections before rendering widget-bound path inputs.
     if st.session_state.pending_template_path is not None:
@@ -660,9 +662,12 @@ def main() -> None:
                 sample_payload_map=sample_payload_map,
             )
             saved_to = save_history_entry(history_entry, default_history_directory())
-            st.caption(f"Saved audit snapshot: {saved_to.name}")
+            st.session_state.last_saved_snapshot_name = saved_to.name
         except ValueError as error:
             st.error(str(error))
+
+    if st.session_state.last_saved_snapshot_name:
+        st.caption(f"Saved audit snapshot: {st.session_state.last_saved_snapshot_name}")
 
     overview_tab, diff_tab, raw_json_tab, history_tab = st.tabs(list(minimal_plus_tab_labels()))
 
