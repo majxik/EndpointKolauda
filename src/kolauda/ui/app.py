@@ -154,6 +154,31 @@ def build_audit_rows(
     return rows
 
 
+def build_overview_issue_rows(audit_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build compact EXTRA/MISSING summary rows for the Overview tab."""
+    summary_rows: list[dict[str, Any]] = []
+    for row in audit_rows:
+        status = str(row.get("Status", ""))
+        issue_types: list[str] = []
+        if "EXTRA" in status:
+            issue_types.append("EXTRA")
+        if "MISSING" in status:
+            issue_types.append("MISSING")
+        if not issue_types:
+            continue
+
+        for issue_type in issue_types:
+            summary_rows.append(
+                {
+                    "Issue Type": issue_type,
+                    "Field Path": str(row.get("Field Path", "")),
+                    "Status": status,
+                }
+            )
+
+    return summary_rows
+
+
 def load_sample_json(path: Path) -> Any:
     """Load one sample JSON document for the explorer panel."""
     return _load_json_file(path)
@@ -287,7 +312,10 @@ def build_history_entry(
 ) -> dict[str, Any]:
     """Create one persistable history snapshot from the current UI run."""
     timestamp_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    endpoint_key = Path(samples_path_input).name or "unknown"
     return {
+        # Keep payload backward-compatible for older running app processes.
+        # Updated validators normalize and persist this as schema v2.
         "schema_version": 1,
         "audit_id": uuid4().hex,
         "timestamp_utc": timestamp_utc,
@@ -295,6 +323,12 @@ def build_history_entry(
             "template_path": template_path_input,
             "samples_path": samples_path_input,
             "sample_files": [sample_file.name for sample_file in sample_files],
+        },
+        "metadata": {
+            "endpoint_key": endpoint_key,
+            "endpoint_label": "",
+            "environment": "",
+            "notes": "",
         },
         "metrics": {
             "total_files": metrics.total_files,
@@ -309,17 +343,77 @@ def build_history_entry(
 
 
 def history_chart_rows(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build chart-ready rows for Error Count over Time."""
+    """Build chart-ready rows for selectable history trend metrics."""
+    return history_chart_rows_for_metric(entries, metric_key="total_errors")
+
+
+def history_chart_rows_for_metric(entries: list[dict[str, Any]], metric_key: str) -> list[dict[str, Any]]:
+    """Build chart-ready rows for one metric over time."""
+    metric_to_label = {
+        "total_errors": "Total Errors",
+        "healthy_fields_percent": "Healthy Fields %",
+    }
+    if metric_key not in metric_to_label:
+        raise ValueError(f"Unsupported history metric: {metric_key}")
+
+    chart_label = metric_to_label[metric_key]
     rows: list[dict[str, Any]] = []
     for entry in entries:
         metrics = entry.get("metrics", {})
+        metric_value = float(metrics.get(metric_key, 0.0))
+        metadata = entry.get("metadata", {})
         rows.append(
             {
                 "Timestamp": str(entry.get("timestamp_utc", "")),
-                "Total Errors": int(metrics.get("total_errors", 0)),
+                chart_label: metric_value,
+                "Endpoint": str(metadata.get("endpoint_key", "unknown")),
             }
         )
     return rows
+
+
+def _parse_iso_timestamp(value: str) -> datetime | None:
+    """Parse stored timestamp values and return timezone-aware UTC datetimes."""
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def filter_history_entries(
+    entries: list[dict[str, Any]],
+    *,
+    endpoint_key: str,
+    start_timestamp_utc: str,
+    end_timestamp_utc: str,
+) -> list[dict[str, Any]]:
+    """Filter history entries by endpoint and optional UTC timestamp bounds."""
+    selected_endpoint = endpoint_key.strip()
+    start_dt = _parse_iso_timestamp(start_timestamp_utc)
+    end_dt = _parse_iso_timestamp(end_timestamp_utc)
+
+    filtered: list[dict[str, Any]] = []
+    for entry in entries:
+        metadata = entry.get("metadata", {})
+        entry_endpoint = str(metadata.get("endpoint_key", "unknown"))
+        if selected_endpoint != "All" and entry_endpoint != selected_endpoint:
+            continue
+
+        timestamp_dt = _parse_iso_timestamp(str(entry.get("timestamp_utc", "")))
+        if start_dt is not None and (timestamp_dt is None or timestamp_dt < start_dt):
+            continue
+        if end_dt is not None and (timestamp_dt is None or timestamp_dt > end_dt):
+            continue
+
+        filtered.append(entry)
+    return filtered
 
 
 def has_live_result(last_result: Any) -> bool:
@@ -579,6 +673,13 @@ def main() -> None:
             col2.metric("Total Errors", metrics.total_errors)
             col3.metric("Healthy Fields %", f"{metrics.healthy_fields_percent:.1f}%")
 
+            st.markdown("**Highlighted EXTRA/MISSING Paths (Summary)**")
+            overview_issue_rows = build_overview_issue_rows(audit_rows)
+            if overview_issue_rows:
+                st.dataframe(overview_issue_rows, use_container_width=True)
+            else:
+                st.success("No EXTRA/MISSING paths found in this audit.")
+
             st.subheader("Audit Table")
             st.dataframe(audit_rows, use_container_width=True)
 
@@ -621,6 +722,8 @@ def main() -> None:
             key="history_load_path",
             placeholder="C:/path/to/saved-audit.json",
         )
+        # Keep button baseline aligned with the text input control (not its label).
+        load_col2.markdown("<div style='height: 1.65rem;'></div>", unsafe_allow_html=True)
         if load_col2.button("Load File", use_container_width=True):
             try:
                 loaded_entry = load_history_entry(Path(history_path))
@@ -668,14 +771,62 @@ def main() -> None:
             st.info("No history snapshots found yet. Run at least one audit to populate history.")
             return
 
-        st.markdown("**Error Count over Time**")
-        st.line_chart(history_chart_rows(all_entries), x="Timestamp", y="Total Errors", use_container_width=True)
+        endpoint_options = ["All", *sorted({
+            str(entry.get("metadata", {}).get("endpoint_key", "unknown"))
+            for entry in all_entries
+        })]
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        selected_endpoint = filter_col1.selectbox(
+            "Endpoint",
+            options=endpoint_options,
+            key="history_filter_endpoint",
+        )
+        start_timestamp = filter_col2.text_input(
+            "From (UTC ISO, optional)",
+            key="history_filter_start",
+            placeholder="2026-05-01T00:00:00+00:00",
+        )
+        end_timestamp = filter_col3.text_input(
+            "To (UTC ISO, optional)",
+            key="history_filter_end",
+            placeholder="2026-05-31T23:59:59+00:00",
+        )
+
+        filtered_entries = filter_history_entries(
+            all_entries,
+            endpoint_key=selected_endpoint,
+            start_timestamp_utc=start_timestamp,
+            end_timestamp_utc=end_timestamp,
+        )
+        if not filtered_entries:
+            st.info("No snapshots match the selected endpoint/date filters.")
+            return
+
+        metric_col1, metric_col2 = st.columns([2, 1])
+        selected_metric = metric_col1.selectbox(
+            "Trend Metric",
+            options=["total_errors", "healthy_fields_percent"],
+            format_func=lambda value: "Total Errors" if value == "total_errors" else "Healthy Fields %",
+            key="history_trend_metric",
+        )
+        metric_label = "Total Errors" if selected_metric == "total_errors" else "Healthy Fields %"
+        metric_col2.caption(f"Showing {len(filtered_entries)} snapshots")
+
+        st.markdown(f"**{metric_label} over Time**")
+        st.line_chart(
+            history_chart_rows_for_metric(filtered_entries, selected_metric),
+            x="Timestamp",
+            y=metric_label,
+            use_container_width=True,
+        )
 
         audit_option_labels = {
             str(entry.get("audit_id", "")): (
-                f"{entry.get('timestamp_utc', '')} | errors={entry.get('metrics', {}).get('total_errors', 0)}"
+                f"{entry.get('timestamp_utc', '')} | "
+                f"endpoint={entry.get('metadata', {}).get('endpoint_key', 'unknown')} | "
+                f"errors={entry.get('metrics', {}).get('total_errors', 0)}"
             )
-            for entry in all_entries
+            for entry in filtered_entries
         }
 
         selected_audit_id = st.selectbox(
@@ -684,6 +835,19 @@ def main() -> None:
             format_func=lambda audit_id: audit_option_labels[audit_id],
         )
         selected_entry = entries_by_id[selected_audit_id]
+        selected_metadata = selected_entry.get("metadata", {})
+
+        st.caption(
+            " | ".join(
+                [
+                    f"Endpoint: {selected_metadata.get('endpoint_key', 'unknown')}",
+                    f"Environment: {selected_metadata.get('environment', '-') or '-'}",
+                    f"Label: {selected_metadata.get('endpoint_label', '-') or '-'}",
+                ]
+            )
+        )
+        if str(selected_metadata.get("notes", "")).strip():
+            st.caption(f"Notes: {selected_metadata['notes']}")
 
         selected_metrics = selected_entry.get("metrics", {})
         hist_col1, hist_col2, hist_col3 = st.columns(3)

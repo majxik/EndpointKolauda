@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-HISTORY_SCHEMA_VERSION = 1
+HISTORY_SCHEMA_VERSION = 2
+
+
+def _infer_endpoint_key(inputs: dict[str, Any]) -> str:
+    """Infer endpoint key from inputs when metadata is missing in older snapshots."""
+    samples_path = str(inputs.get("samples_path", "")).strip()
+    if not samples_path:
+        return "unknown"
+    return Path(samples_path).name or "unknown"
 
 
 def validate_history_entry(entry: Any) -> dict[str, Any]:
@@ -29,10 +37,11 @@ def validate_history_entry(entry: Any) -> dict[str, Any]:
     if missing_top_level:
         raise ValueError(f"History entry is missing keys: {', '.join(missing_top_level)}")
 
-    if entry["schema_version"] != HISTORY_SCHEMA_VERSION:
+    schema_version = int(entry["schema_version"])
+    if schema_version not in {1, HISTORY_SCHEMA_VERSION}:
         raise ValueError(
-            f"Unsupported history schema version: {entry['schema_version']} "
-            f"(expected {HISTORY_SCHEMA_VERSION})"
+            f"Unsupported history schema version: {schema_version} "
+            f"(supported: 1, {HISTORY_SCHEMA_VERSION})"
         )
 
     if not isinstance(entry["inputs"], dict):
@@ -45,6 +54,21 @@ def validate_history_entry(entry: Any) -> dict[str, Any]:
         raise ValueError("History entry 'audit_rows' must be an array.")
     if not isinstance(entry["field_details_by_path"], dict):
         raise ValueError("History entry 'field_details_by_path' must be an object.")
+
+    metadata = entry.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("History entry 'metadata' must be an object when provided.")
+
+    normalized_metadata = {
+        "endpoint_key": str(metadata.get("endpoint_key") or _infer_endpoint_key(entry["inputs"])),
+        "endpoint_label": str(metadata.get("endpoint_label") or ""),
+        "environment": str(metadata.get("environment") or ""),
+        "notes": str(metadata.get("notes") or ""),
+    }
+    entry["metadata"] = normalized_metadata
+    entry["schema_version"] = HISTORY_SCHEMA_VERSION
 
     return entry
 

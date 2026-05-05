@@ -146,6 +146,13 @@ UI features in Ticket009 include:
 - Historical diff and field-details inspector (same style as live `Diff` tab)
 - Load a saved audit JSON from disk (path input or file upload) and restore it into main tabs
 
+UI features in Ticket011 (MVP) include:
+
+- Endpoint-aware history metadata on new snapshots (`endpoint_key` inferred from samples path)
+- Backward-compatible loading for older history snapshot schema
+- History filters by endpoint and optional UTC date range
+- Trend metric selector in History tab (`Total Errors` or `Healthy Fields %`)
+
 ## Report columns
 
 - `Field Path`: normalized field path (list indexes are normalized as `[]`)
