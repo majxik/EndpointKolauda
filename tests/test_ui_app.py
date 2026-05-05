@@ -8,6 +8,7 @@ from kolauda.ui.app import (
     build_field_details,
     build_sample_file_map,
     compute_dashboard_metrics,
+    has_live_result,
     list_picker_entries,
     minimal_plus_tab_labels,
     resolve_base_directory,
@@ -128,6 +129,11 @@ def test_ui_build_field_details_exposes_audit_statistics(tmp_path: Path) -> None
 
 def test_ui_minimal_plus_tab_labels_match_expected_order() -> None:
     assert minimal_plus_tab_labels() == ("Overview", "Diff", "Raw JSON", "History")
+
+
+def test_ui_has_live_result_detects_missing_and_present_state() -> None:
+    assert has_live_result(None) is False
+    assert has_live_result({"metrics": {}}) is True
 
 
 def test_ui_resolve_base_directory_returns_existing_dir(tmp_path: Path) -> None:

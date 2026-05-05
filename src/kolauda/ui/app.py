@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from kolauda.cli.main import (
     _collect_issue_statuses_by_path,
@@ -15,6 +17,12 @@ from kolauda.cli.main import (
 )
 from kolauda.core.auditor import AuditReport, KolaudaAuditor
 from kolauda.core.engine import IssueStatus, Observation, ResponseComparator
+from kolauda.core.history import (
+    load_history_entries,
+    load_history_entry,
+    save_history_entry,
+    validate_history_entry,
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,11 @@ def list_picker_entries(directory: Path) -> tuple[list[Path], list[Path]]:
 def to_display_path(path: Path) -> str:
     """Render filesystem paths for UI controls in a consistent way."""
     return str(path.resolve())
+
+
+def default_history_directory() -> Path:
+    """Return the default local history directory used by the Streamlit UI."""
+    return Path.cwd() / ".kolauda" / "history"
 
 
 def run_audit(template: Path, samples: str) -> tuple[AuditReport, list[Observation], list[Path]]:
@@ -151,17 +164,26 @@ def build_sample_file_map(sample_files: list[Path]) -> dict[str, Path]:
     return {sample_file.name: sample_file for sample_file in sample_files}
 
 
+def build_sample_payload_map(sample_files: list[Path]) -> dict[str, Any]:
+    """Map sample file names to preloaded JSON payloads for selectors and history."""
+    return {sample_file.name: load_sample_json(sample_file) for sample_file in sample_files}
+
+
 def resolve_json_source(
     choice: str,
     template_payload: Any,
-    sample_file_map: dict[str, Path],
+    sample_source_map: dict[str, Any],
 ) -> tuple[str, Any]:
     """Resolve a dropdown choice into a display label and JSON payload."""
     if choice == "Template":
         return "Template", template_payload
-    if choice not in sample_file_map:
+    if choice not in sample_source_map:
         raise ValueError(f"Unknown sample selection: {choice}")
-    return choice, load_sample_json(sample_file_map[choice])
+
+    value = sample_source_map[choice]
+    if isinstance(value, Path):
+        return choice, load_sample_json(value)
+    return choice, value
 
 
 def build_diff_rows(left_payload: Any, right_payload: Any, right_label: str) -> list[dict[str, str]]:
@@ -212,6 +234,174 @@ def build_field_details(
     )
 
 
+def build_field_details_by_path(
+    report: AuditReport,
+    issue_statuses_by_path: dict[str, set[IssueStatus]],
+) -> dict[str, dict[str, Any]]:
+    """Create a serializable lookup for per-path field detail metrics."""
+    details_by_path: dict[str, dict[str, Any]] = {}
+    for path in report.by_path:
+        details = build_field_details(path, report, issue_statuses_by_path)
+        if details is None:
+            continue
+        details_by_path[path] = {
+            "path": details.path,
+            "status": details.status,
+            "presence_percent": details.presence_percent,
+            "null_percent": details.null_percent,
+            "unique_values": details.unique_values,
+            "observed_types": details.observed_types,
+        }
+    return details_by_path
+
+
+def resolve_field_details(
+    path: str,
+    field_details_by_path: dict[str, dict[str, Any]],
+) -> FieldDetails | None:
+    """Resolve one path from serialized detail map to a FieldDetails model."""
+    details = field_details_by_path.get(path)
+    if details is None:
+        return None
+
+    return FieldDetails(
+        path=str(details.get("path", path)),
+        status=str(details.get("status", "OK")),
+        presence_percent=float(details.get("presence_percent", 0.0)),
+        null_percent=float(details.get("null_percent", 0.0)),
+        unique_values=int(details.get("unique_values", 0)),
+        observed_types=str(details.get("observed_types", "-")),
+    )
+
+
+def build_history_entry(
+    *,
+    template_path_input: str,
+    samples_path_input: str,
+    sample_files: list[Path],
+    metrics: DashboardMetrics,
+    audit_rows: list[dict[str, Any]],
+    field_details_by_path: dict[str, dict[str, Any]],
+    template_payload: Any,
+    sample_payload_map: dict[str, Any],
+) -> dict[str, Any]:
+    """Create one persistable history snapshot from the current UI run."""
+    timestamp_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return {
+        "schema_version": 1,
+        "audit_id": uuid4().hex,
+        "timestamp_utc": timestamp_utc,
+        "inputs": {
+            "template_path": template_path_input,
+            "samples_path": samples_path_input,
+            "sample_files": [sample_file.name for sample_file in sample_files],
+        },
+        "metrics": {
+            "total_files": metrics.total_files,
+            "total_errors": metrics.total_errors,
+            "healthy_fields_percent": metrics.healthy_fields_percent,
+        },
+        "template_payload": template_payload,
+        "sample_payloads": sample_payload_map,
+        "audit_rows": audit_rows,
+        "field_details_by_path": field_details_by_path,
+    }
+
+
+def history_chart_rows(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build chart-ready rows for Error Count over Time."""
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        metrics = entry.get("metrics", {})
+        rows.append(
+            {
+                "Timestamp": str(entry.get("timestamp_utc", "")),
+                "Total Errors": int(metrics.get("total_errors", 0)),
+            }
+        )
+    return rows
+
+
+def has_live_result(last_result: Any) -> bool:
+    """Return whether the UI currently has a loaded live/current audit result."""
+    return isinstance(last_result, dict)
+
+
+def _render_field_metrics(details: FieldDetails, st: Any) -> None:
+    """Render the standard four-card field details panel."""
+    details_col1, details_col2, details_col3, details_col4 = st.columns(4)
+    details_col1.metric("Status", details.status)
+    details_col2.metric("Presence %", f"{details.presence_percent:.1f}%")
+    details_col3.metric("Null %", f"{details.null_percent:.1f}%")
+    details_col4.metric("Unique Values", details.unique_values)
+    st.caption(f"Observed types: {details.observed_types}")
+
+
+def _render_diff_section(
+    *,
+    st: Any,
+    title: str,
+    template_payload: Any,
+    sample_payload_map: dict[str, Any],
+    field_details_by_path: dict[str, dict[str, Any]],
+    key_prefix: str,
+) -> None:
+    """Render a reusable diff + field-details section for current or historical data."""
+    st.subheader(title)
+    sample_names = sorted(sample_payload_map.keys())
+
+    if not sample_names:
+        st.info("No sample files available for diff view.")
+        return
+
+    left_selector, right_selector = st.columns(2)
+    left_choice = left_selector.selectbox(
+        "Left source",
+        options=["Template", *sample_names],
+        index=0,
+        key=f"{key_prefix}_left",
+    )
+    right_choice = right_selector.selectbox(
+        "Right source",
+        options=sample_names,
+        index=0,
+        key=f"{key_prefix}_right",
+    )
+
+    left_label, left_payload = resolve_json_source(left_choice, template_payload, sample_payload_map)
+    right_label, right_payload = resolve_json_source(right_choice, template_payload, sample_payload_map)
+
+    left_col, right_col = st.columns(2)
+    left_col.markdown(f"**Left: {left_label}**")
+    left_col.code(json.dumps(left_payload, indent=2), language="json")
+    right_col.markdown(f"**Right: {right_label}**")
+    right_col.code(json.dumps(right_payload, indent=2), language="json")
+
+    diff_rows = build_diff_rows(left_payload, right_payload, right_label)
+    st.markdown("**Highlighted EXTRA/MISSING Paths**")
+    if diff_rows:
+        st.dataframe(diff_rows, use_container_width=True)
+    else:
+        st.success("No EXTRA/MISSING differences found for this comparison.")
+
+    st.markdown("**Field Details**")
+    field_options = sorted({*field_details_by_path.keys(), *(row["Field Path"] for row in diff_rows)})
+    if not field_options:
+        st.info("No field paths available.")
+        return
+
+    selected_field = st.selectbox(
+        "Select a field to inspect",
+        options=field_options,
+        key=f"{key_prefix}_field",
+    )
+    details = resolve_field_details(selected_field, field_details_by_path)
+    if details is None:
+        st.info("This path exists in the pair diff but has no aggregate stats in this snapshot.")
+        return
+    _render_field_metrics(details, st)
+
+
 def main() -> None:
     """Run the Streamlit dashboard app."""
     import streamlit as st
@@ -231,6 +421,10 @@ def main() -> None:
         st.session_state.pending_template_path = None
     if "pending_samples_path" not in st.session_state:
         st.session_state.pending_samples_path = None
+    if "history_external_entries" not in st.session_state:
+        st.session_state.history_external_entries = []
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
 
     # Apply picker selections before rendering widget-bound path inputs.
     if st.session_state.pending_template_path is not None:
@@ -319,9 +513,6 @@ def main() -> None:
         samples_path_input = st.session_state.samples_path_input
         run_clicked = st.button("Run Kolauda", type="primary", use_container_width=True)
 
-    if "last_result" not in st.session_state:
-        st.session_state.last_result = None
-
     if run_clicked:
         try:
             template_path = Path(template_path_input)
@@ -330,6 +521,7 @@ def main() -> None:
                 template=template_path,
                 samples=samples_path_input,
             )
+            sample_payload_map = build_sample_payload_map(sample_files)
             issue_statuses_by_path = _collect_issue_statuses_by_path(observations)
             metrics = compute_dashboard_metrics(
                 report=report,
@@ -337,118 +529,208 @@ def main() -> None:
                 issue_statuses_by_path=issue_statuses_by_path,
                 total_files=len(sample_files),
             )
+            audit_rows = build_audit_rows(report, issue_statuses_by_path)
+            field_details_by_path = build_field_details_by_path(report, issue_statuses_by_path)
+
             st.session_state.last_result = {
-                "report": report,
-                "observations": observations,
-                "issue_statuses_by_path": issue_statuses_by_path,
-                "sample_files": sample_files,
                 "template_payload": template_payload,
+                "sample_payload_map": sample_payload_map,
                 "metrics": metrics,
+                "audit_rows": audit_rows,
+                "field_details_by_path": field_details_by_path,
+                "inputs": {
+                    "template_path": template_path_input,
+                    "samples_path": samples_path_input,
+                },
             }
+
+            history_entry = build_history_entry(
+                template_path_input=template_path_input,
+                samples_path_input=samples_path_input,
+                sample_files=sample_files,
+                metrics=metrics,
+                audit_rows=audit_rows,
+                field_details_by_path=field_details_by_path,
+                template_payload=template_payload,
+                sample_payload_map=sample_payload_map,
+            )
+            saved_to = save_history_entry(history_entry, default_history_directory())
+            st.caption(f"Saved audit snapshot: {saved_to.name}")
         except ValueError as error:
             st.error(str(error))
-
-    if st.session_state.last_result is None:
-        st.info("Pick input paths in the sidebar and click 'Run Kolauda'.")
-        return
-
-    result = st.session_state.last_result
-    report: AuditReport = result["report"]
-    issue_statuses_by_path: dict[str, set[IssueStatus]] = result["issue_statuses_by_path"]
-    sample_files: list[Path] = result["sample_files"]
-    template_payload: Any = result["template_payload"]
-    metrics: DashboardMetrics = result["metrics"]
 
     overview_tab, diff_tab, raw_json_tab, history_tab = st.tabs(list(minimal_plus_tab_labels()))
 
-    with overview_tab:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Files", metrics.total_files)
-        col2.metric("Total Errors", metrics.total_errors)
-        col3.metric("Healthy Fields %", f"{metrics.healthy_fields_percent:.1f}%")
+    live_result_available = has_live_result(st.session_state.last_result)
+    if live_result_available:
+        result = st.session_state.last_result
+        template_payload: Any = result["template_payload"]
+        sample_payload_map: dict[str, Any] = result["sample_payload_map"]
+        metrics: DashboardMetrics = result["metrics"]
+        audit_rows: list[dict[str, Any]] = result["audit_rows"]
+        field_details_by_path: dict[str, dict[str, Any]] = result["field_details_by_path"]
 
-        st.subheader("Audit Table")
-        st.dataframe(build_audit_rows(report, issue_statuses_by_path), use_container_width=True)
+    with overview_tab:
+        if not live_result_available:
+            st.info("No current audit loaded. Run Kolauda or load one from the History tab.")
+        else:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Files", metrics.total_files)
+            col2.metric("Total Errors", metrics.total_errors)
+            col3.metric("Healthy Fields %", f"{metrics.healthy_fields_percent:.1f}%")
+
+            st.subheader("Audit Table")
+            st.dataframe(audit_rows, use_container_width=True)
 
     with diff_tab:
-        st.subheader("Side-by-Side JSON Diff Viewer")
-        sample_file_map = build_sample_file_map(sample_files)
-        sample_names = sorted(sample_file_map.keys())
-
-        if not sample_names:
-            st.info("No sample files available for diff view.")
+        if not live_result_available:
+            st.info("No current audit loaded. Run Kolauda or load one from the History tab.")
         else:
-            diff_selector_left, diff_selector_right = st.columns(2)
-            left_choice = diff_selector_left.selectbox(
-                "Left source",
-                options=["Template", *sample_names],
-                index=0,
-                help="Baseline JSON. Defaults to template, but you can select a sample file.",
+            _render_diff_section(
+                st=st,
+                title="Side-by-Side JSON Diff Viewer",
+                template_payload=template_payload,
+                sample_payload_map=sample_payload_map,
+                field_details_by_path=field_details_by_path,
+                key_prefix="live_diff",
             )
-            right_choice = diff_selector_right.selectbox(
-                "Right source",
-                options=sample_names,
-                index=0,
-                help="Comparison JSON file.",
-            )
-
-            try:
-                left_label, left_payload = resolve_json_source(left_choice, template_payload, sample_file_map)
-                right_label, right_payload = resolve_json_source(right_choice, template_payload, sample_file_map)
-                left_col, right_col = st.columns(2)
-                left_col.markdown(f"**Left: {left_label}**")
-                left_col.code(json.dumps(left_payload, indent=2), language="json")
-                right_col.markdown(f"**Right: {right_label}**")
-                right_col.code(json.dumps(right_payload, indent=2), language="json")
-
-                diff_rows = build_diff_rows(left_payload, right_payload, right_label)
-                st.markdown("**Highlighted EXTRA/MISSING Paths**")
-                if diff_rows:
-                    st.dataframe(diff_rows, use_container_width=True)
-                else:
-                    st.success("No EXTRA/MISSING differences found for this comparison.")
-
-                st.markdown("**Field Details**")
-                field_options = sorted({*report.by_path.keys(), *(row["Field Path"] for row in diff_rows)})
-                if not field_options:
-                    st.info("No field paths available.")
-                else:
-                    selected_field = st.selectbox(
-                        "Select a field to inspect",
-                        options=field_options,
-                        help="Choose a path from the audit model to inspect cross-file statistics.",
-                    )
-                    details = build_field_details(selected_field, report, issue_statuses_by_path)
-                    if details is None:
-                        st.info(
-                            "This path exists in the pair diff but has no aggregate stats in the current audit report."
-                        )
-                    else:
-                        details_col1, details_col2, details_col3, details_col4 = st.columns(4)
-                        details_col1.metric("Status", details.status)
-                        details_col2.metric("Presence %", f"{details.presence_percent:.1f}%")
-                        details_col3.metric("Null %", f"{details.null_percent:.1f}%")
-                        details_col4.metric("Unique Values", details.unique_values)
-                        st.caption(f"Observed types: {details.observed_types}")
-            except ValueError as error:
-                st.error(str(error))
 
     with raw_json_tab:
-        st.subheader("JSON Explorer")
-        selected_sample = st.selectbox(
-            "Select sample file",
-            options=sample_files,
-            format_func=lambda p: p.name,
-        )
-        try:
-            sample_payload = load_sample_json(selected_sample)
-            st.code(json.dumps(sample_payload, indent=2), language="json")
-        except ValueError as error:
-            st.error(str(error))
+        if not live_result_available:
+            st.info("No current audit loaded. Run Kolauda or load one from the History tab.")
+        else:
+            st.subheader("JSON Explorer")
+            sample_names = sorted(sample_payload_map.keys())
+            if not sample_names:
+                st.info("No sample payloads available.")
+            else:
+                selected_sample_name = st.selectbox(
+                    "Select sample file",
+                    options=sample_names,
+                )
+                st.code(json.dumps(sample_payload_map[selected_sample_name], indent=2), language="json")
 
     with history_tab:
         st.subheader("History")
-        st.info("History and persistence are planned for Ticket009.")
+        history_dir = default_history_directory()
+        st.caption(f"History directory: {to_display_path(history_dir)}")
+
+        load_col1, load_col2 = st.columns([3, 1])
+        history_path = load_col1.text_input(
+            "Load previous audit JSON file",
+            key="history_load_path",
+            placeholder="C:/path/to/saved-audit.json",
+        )
+        if load_col2.button("Load File", use_container_width=True):
+            try:
+                loaded_entry = load_history_entry(Path(history_path))
+                existing_ids = {
+                    str(entry.get("audit_id", ""))
+                    for entry in st.session_state.history_external_entries
+                }
+                if str(loaded_entry.get("audit_id", "")) not in existing_ids:
+                    st.session_state.history_external_entries.append(loaded_entry)
+                st.success("History file loaded.")
+            except ValueError as error:
+                st.error(str(error))
+
+        uploaded_history_file = st.file_uploader(
+            "Or upload a saved audit JSON",
+            type=["json"],
+            key="history_file_uploader",
+        )
+        if uploaded_history_file is not None:
+            try:
+                uploaded_payload = json.loads(uploaded_history_file.getvalue().decode("utf-8"))
+                loaded_entry = validate_history_entry(uploaded_payload)
+                existing_ids = {
+                    str(entry.get("audit_id", ""))
+                    for entry in st.session_state.history_external_entries
+                }
+                if str(loaded_entry.get("audit_id", "")) not in existing_ids:
+                    st.session_state.history_external_entries.append(loaded_entry)
+                st.success("Uploaded history loaded.")
+            except (ValueError, json.JSONDecodeError) as error:
+                st.error(f"Invalid uploaded history file: {error}")
+
+        disk_entries = load_history_entries(history_dir)
+        entries_by_id: dict[str, dict[str, Any]] = {}
+        for entry in [*disk_entries, *st.session_state.history_external_entries]:
+            audit_id = str(entry.get("audit_id", ""))
+            if audit_id:
+                entries_by_id[audit_id] = entry
+
+        all_entries = sorted(
+            entries_by_id.values(),
+            key=lambda entry: str(entry.get("timestamp_utc", "")),
+        )
+        if not all_entries:
+            st.info("No history snapshots found yet. Run at least one audit to populate history.")
+            return
+
+        st.markdown("**Error Count over Time**")
+        st.line_chart(history_chart_rows(all_entries), x="Timestamp", y="Total Errors", use_container_width=True)
+
+        audit_option_labels = {
+            str(entry.get("audit_id", "")): (
+                f"{entry.get('timestamp_utc', '')} | errors={entry.get('metrics', {}).get('total_errors', 0)}"
+            )
+            for entry in all_entries
+        }
+
+        selected_audit_id = st.selectbox(
+            "Select audit snapshot",
+            options=list(audit_option_labels.keys()),
+            format_func=lambda audit_id: audit_option_labels[audit_id],
+        )
+        selected_entry = entries_by_id[selected_audit_id]
+
+        selected_metrics = selected_entry.get("metrics", {})
+        hist_col1, hist_col2, hist_col3 = st.columns(3)
+        hist_col1.metric("Total Files", int(selected_metrics.get("total_files", 0)))
+        hist_col2.metric("Total Errors", int(selected_metrics.get("total_errors", 0)))
+        hist_col3.metric(
+            "Healthy Fields %",
+            f"{float(selected_metrics.get('healthy_fields_percent', 0.0)):.1f}%",
+        )
+
+        st.markdown("**Audit Table Snapshot**")
+        st.dataframe(selected_entry.get("audit_rows", []), use_container_width=True)
+
+        if st.button("Load This Audit Into Main Tabs", use_container_width=True):
+            selected_inputs = selected_entry.get("inputs", {})
+            selected_samples = selected_entry.get("sample_payloads", {})
+            st.session_state.last_result = {
+                "template_payload": selected_entry.get("template_payload"),
+                "sample_payload_map": selected_samples,
+                "metrics": DashboardMetrics(
+                    total_files=int(selected_metrics.get("total_files", 0)),
+                    total_errors=int(selected_metrics.get("total_errors", 0)),
+                    healthy_fields_percent=float(selected_metrics.get("healthy_fields_percent", 0.0)),
+                ),
+                "audit_rows": selected_entry.get("audit_rows", []),
+                "field_details_by_path": selected_entry.get("field_details_by_path", {}),
+                "inputs": {
+                    "template_path": str(selected_inputs.get("template_path", "")),
+                    "samples_path": str(selected_inputs.get("samples_path", "")),
+                },
+            }
+            st.session_state.pending_template_path = str(selected_inputs.get("template_path", ""))
+            st.session_state.pending_samples_path = str(selected_inputs.get("samples_path", ""))
+            st.rerun()
+
+        st.markdown("**Historical Diff & Field Details**")
+        historical_template_payload = selected_entry.get("template_payload")
+        historical_sample_payloads = selected_entry.get("sample_payloads", {})
+        historical_field_details = selected_entry.get("field_details_by_path", {})
+        _render_diff_section(
+            st=st,
+            title="Historical Snapshot Diff",
+            template_payload=historical_template_payload,
+            sample_payload_map=historical_sample_payloads,
+            field_details_by_path=historical_field_details,
+            key_prefix="history_diff",
+        )
 
 
 if __name__ == "__main__":
